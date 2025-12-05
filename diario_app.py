@@ -8,13 +8,13 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Diário Intestinal V14 (Dinâmico)", page_icon="💩", layout="wide")
-st.title("💩 Rastreador de Saúde (Lista Dinâmica)")
+st.set_page_config(page_title="Diário Intestinal V16", page_icon="💩", layout="wide")
+st.title("💩 Rastreador de Saúde")
 
 # --- 2. CONFIGURAÇÃO GOOGLE SHEETS ---
 NOME_PLANILHA = "Diario_Intestinal_DB" 
 
-# Lista padrão para backup/inicialização
+# Listas Padrão
 LISTA_PADRAO_BACKUP = [
     'OVO', 'BANANA', 'ARROZ', 'TAPIOCA', 'FRANGO', 'AVEIA', 
     'CENOURA', 'TOMATE', 'CARNE', 'INHAME', 'ABOBRINHA', 
@@ -39,11 +39,9 @@ LISTA_REMEDIOS_COMUNS = [
     'Mesalazina', 'Antialérgico', 'Analgésico', 'Carvão Ativado'
 ]
 
-
 # --- 3. CONEXÃO E FUNÇÕES DO BANCO ---
 @st.cache_resource
 def conectar_google_sheets():
-    """Conecta ao Google Sheets usando st.secrets"""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
@@ -52,28 +50,22 @@ def conectar_google_sheets():
         credentials_info = st.secrets["gcp_service_account"]
         creds = Credentials.from_service_account_info(credentials_info, scopes=scopes)
         client = gspread.authorize(creds)
-        return client.open(NOME_PLANILHA) # Retorna a planilha inteira (workbook)
+        return client.open(NOME_PLANILHA)
     except Exception as e:
         st.error(f"❌ Erro de Conexão: {e}")
         st.stop()
 
 def obter_lista_alimentos(workbook):
-    """Lê a lista da aba 'Config' ou cria se não existir."""
     try:
-        # Tenta abrir a aba Config
         try:
             sheet_config = workbook.worksheet("Config")
         except:
-            # Se não existe, cria ela
             sheet_config = workbook.add_worksheet(title="Config", rows=100, cols=5)
             sheet_config.update_acell("A1", "Alimentos")
         
-        # Lê os alimentos da coluna A (ignorando o cabeçalho)
         lista_atual = sheet_config.col_values(1)[1:]
         
-        # Se estiver vazia, popula com a lista padrão (Migração Automática)
         if not lista_atual:
-            # Transforma lista em lista de listas para o gspread [[Item], [Item]]
             dados_iniciais = [[item] for item in LISTA_PADRAO_BACKUP]
             sheet_config.update("A2", dados_iniciais)
             lista_atual = LISTA_PADRAO_BACKUP
@@ -85,7 +77,6 @@ def obter_lista_alimentos(workbook):
         return LISTA_PADRAO_BACKUP, None
 
 def adicionar_novo_alimento(novo_alimento, workbook):
-    """Adiciona alimento na Config e cria coluna na aba principal."""
     novo_alimento = novo_alimento.strip().upper()
     try:
         lista_atual, sheet_config = obter_lista_alimentos(workbook)
@@ -96,12 +87,22 @@ def adicionar_novo_alimento(novo_alimento, workbook):
         # 1. Adiciona na aba Config
         sheet_config.append_row([novo_alimento])
         
-        # 2. Adiciona coluna na aba principal (Dados) se não existir
+        # 2. Adiciona coluna na aba principal (Dados)
         sheet_dados = workbook.sheet1
         headers = sheet_dados.row_values(1)
+        
         if novo_alimento not in headers:
-            # Adiciona na primeira coluna vazia da primeira linha
-            sheet_dados.update_cell(1, len(headers) + 1, novo_alimento)
+            # CORREÇÃO DO ERRO DE LIMITE DE COLUNAS:
+            # Verifica se precisa adicionar mais colunas na planilha antes de escrever
+            num_cols_atual = sheet_dados.col_count
+            nova_posicao = len(headers) + 1
+            
+            if nova_posicao > num_cols_atual:
+                # Adiciona 5 colunas extras para garantir espaço
+                sheet_dados.add_cols(5)
+                
+            # Agora é seguro escrever
+            sheet_dados.update_cell(1, nova_posicao, novo_alimento)
             
         return True, f"✅ '{novo_alimento}' cadastrado com sucesso!"
     except Exception as e:
@@ -110,8 +111,6 @@ def adicionar_novo_alimento(novo_alimento, workbook):
 def carregar_dados_nuvem():
     workbook = conectar_google_sheets()
     sheet = workbook.sheet1
-    
-    # Carrega lista dinâmica
     lista_alimentos_dinamica, _ = obter_lista_alimentos(workbook)
     
     try:
@@ -121,20 +120,20 @@ def carregar_dados_nuvem():
         if df.empty: return pd.DataFrame(), lista_alimentos_dinamica
 
         cols_alim = [c for c in df.columns if c in lista_alimentos_dinamica]
-        
         for col in cols_alim:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
         if 'Circunferencia' in df.columns:
             df['Circunferencia'] = pd.to_numeric(df['Circunferencia'], errors='coerce')
         
+        df['Escala de Bristol'] = pd.to_numeric(df['Escala de Bristol'], errors='coerce')
+            
         df['DataHora'] = pd.to_datetime(df['Data'] + ' ' + df['Hora'], dayfirst=True, errors='coerce')
         df = df.dropna(subset=['DataHora'])
         df = df.sort_values(by='DataHora').reset_index(drop=True)
         
-        # LÓGICA PORTO SEGURO
+        # Porto Seguro
         df['Porto_Seguro'] = False
-        df['Escala de Bristol'] = pd.to_numeric(df['Escala de Bristol'], errors='coerce').fillna(0) 
         crise_mask = (df['Escala de Bristol'] >= 5)
         
         for i in range(len(df)):
@@ -155,7 +154,6 @@ def carregar_dados_nuvem():
 # Carregamento Inicial
 df, lista_alimentos_dinamica = carregar_dados_nuvem()
 
-
 # --- 4. INTERFACE ---
 aba_inserir, aba_analise, aba_geral, aba_dados = st.tabs(["📥 Inserir", "📊 Detetive", "📈 Geral", "📝 Brutos"])
 
@@ -163,34 +161,35 @@ aba_inserir, aba_analise, aba_geral, aba_dados = st.tabs(["📥 Inserir", "📊 
 with aba_inserir:
     st.header("Novo Registro")
     
-    # --- ÁREA DE CADASTRO DE NOVO ALIMENTO ---
-    with st.expander("➕ Cadastrar Novo Alimento (Farinha de Arroz, etc.)"):
-        c_new1, c_new2 = st.columns([3, 1])
-        with c_new1:
-            novo_alim_input = st.text_input("Nome do Alimento", placeholder="Ex: Farinha de Arroz").upper()
-        with c_new2:
-            st.write("") # Espaço
-            st.write("") 
-            btn_add = st.button("Cadastrar")
-        
-        if btn_add and novo_alim_input:
-            wb = conectar_google_sheets()
-            sucesso, msg = adicionar_novo_alimento(novo_alim_input, wb)
-            if sucesso:
-                st.success(msg)
-                st.cache_data.clear() # Limpa cache
-                st.rerun() # Recarrega para aparecer na lista abaixo
-            else:
-                st.warning(msg)
-
-    # --- FORMULÁRIO PADRÃO ---
     with st.form("form_entrada_nuvem"):
+        # 1. QUANDO?
         c1, c2 = st.columns(2)
         with c1: data_input = st.date_input("📅 Data", datetime.now())
         with c2: hora_input = st.time_input("🕒 Hora", datetime.now())
 
-        with st.expander("🍎 Alimentação & Medicamentos", expanded=True):
-            st.subheader("O que você comeu?")
+        st.divider()
+
+        # 2. O PRINCIPAL: COCÔ (Fora do expander para acesso rápido)
+        st.subheader("💩 Teve evacuação?")
+        col_coco_check, col_coco_slider = st.columns([1, 3])
+        
+        with col_coco_check:
+            teve_coco = st.checkbox("Sim, fui ao banheiro", value=False)
+        
+        bristol_input = ""
+        if teve_coco:
+            with col_coco_slider:
+                st.info("Deslize para classificar:")
+                bristol_input = st.slider("Escala de Bristol", 1, 7, 4, label_visibility="collapsed")
+                # Explicativo rápido
+                if bristol_input <= 2: st.caption("Constipação")
+                elif bristol_input <= 4: st.caption("Ideal")
+                else: st.caption("Tendência à Diarreia")
+        
+        st.divider()
+
+        # 3. ALIMENTOS E OUTROS (Nos expanders para não poluir)
+        with st.expander("🍎 O que você comeu?", expanded=True):
             cp, cm, cg = st.columns(3)
             with cp:
                 st.markdown("🤏 **Pouco (1)**")
@@ -202,33 +201,37 @@ with aba_inserir:
                 st.markdown("🚀 **Muito (3)**")
                 sel_muito = st.multiselect("Nível 3", lista_alimentos_dinamica, key="s3")
             
-            st.divider()
-            st.markdown("💊 **Medicamentos**")
-            meds_sel = st.multiselect("Selecione:", LISTA_REMEDIOS_COMUNS)
-            meds_extra = st.text_input("Outros:", placeholder="Ex: Vitamina D")
+            # Novo Alimento Rápido dentro do fluxo
+            novo_alim_fast = st.text_input("Não achou? Digite para cadastrar (Enter para salvar)", placeholder="Ex: Cuscuz").upper()
 
-        with st.expander("💩 Banheiro & Corpo", expanded=False):
-            cb1, cb2 = st.columns(2)
-            with cb1:
-                teve_coco = st.checkbox("Houve evacuação?")
-                if teve_coco:
-                    bristol_input = st.slider("Escala de Bristol", 1, 7, 4)
-                    st.image("https://upload.wikimedia.org/wikipedia/commons/b/b4/Bristol_stool_scale.svg", width=300)
-                else:
-                    bristol_input = ""
-            with cb2:
-                circunf = st.number_input("📏 Cintura (cm)", min_value=0.0, step=0.1, format="%.1f")
+        with st.expander("💊 Medicamentos & Sintomas & Corpo"):
+            meds_sel = st.multiselect("Medicamentos:", LISTA_REMEDIOS_COMUNS)
+            meds_extra = st.text_input("Outros Remédios:", placeholder="Ex: Vitamina D")
             
-            st.divider()
+            st.markdown("---")
             sintomas_sel = st.multiselect("Sintomas:", LISTA_SINTOMAS_COMUNS)
+            
+            st.markdown("---")
+            circunf = st.number_input("📏 Cintura (cm)", min_value=0.0, step=0.1, format="%.1f")
 
         st.divider()
-        notas_input = st.text_area("Notas", placeholder="Obs...")
+        notas_input = st.text_area("Notas / Observações", placeholder="Como você se sentiu?")
         
-        enviou = st.form_submit_button("💾 SALVAR NA NUVEM", type="primary")
+        # Botão de Salvar Grande
+        enviou = st.form_submit_button("💾 SALVAR REGISTRO", type="primary", use_container_width=True)
 
         if enviou:
             wb = conectar_google_sheets()
+            
+            # Se tiver novo alimento para cadastrar na hora
+            if novo_alim_fast:
+                sucesso, msg = adicionar_novo_alimento(novo_alim_fast, wb)
+                if sucesso: st.toast(msg)
+                else: st.error(msg)
+                # Recarrega a lista para o salvamento atual funcionar se possível, 
+                # mas idealmente o usuário cadastra e depois salva.
+                # Vamos seguir salvando o registro normal.
+
             sheet = wb.sheet1
             if sheet:
                 try:
@@ -238,6 +241,7 @@ with aba_inserir:
                     str_remedios = ", ".join(meds_sel)
                     if meds_extra: str_remedios += f", {meds_extra}" if str_remedios else meds_extra
                     str_sintomas = ", ".join(sintomas_sel)
+                    
                     bristol_save = bristol_input if teve_coco else ""
 
                     valores_input = {
@@ -255,15 +259,23 @@ with aba_inserir:
                     for item in sel_pouco: valores_input[item] = 1
                     for item in sel_medio: valores_input[item] = 2
                     for item in sel_muito: valores_input[item] = 3
+                    # Se cadastrou novo alimento agora, tenta salvar ele como nível 2 se não foi selecionado
+                    if novo_alim_fast and novo_alim_fast not in valores_input:
+                         valores_input[novo_alim_fast] = 2 
                     
-                    for h in headers:
+                    # Preenche a linha respeitando a ordem das colunas no Sheets
+                    # Se houver uma coluna nova criada agora, o headers precisa ser atualizado
+                    # Re-lê headers para garantir
+                    headers_atualizados = sheet.row_values(1)
+                    
+                    for h in headers_atualizados:
                         if h in valores_input: nova_linha.append(valores_input[h])
                         elif h in lista_alimentos_dinamica: nova_linha.append(valores_input.get(h, 0))
                         else: nova_linha.append("")
                     
                     sheet.append_row(nova_linha)
-                    st.success("Salvo!")
-                    st.cache_data.clear() 
+                    st.success("✅ Salvo com sucesso!")
+                    st.cache_data.clear()
                     st.rerun()
 
                 except Exception as e:
