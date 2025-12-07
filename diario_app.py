@@ -9,7 +9,7 @@ from google.oauth2.service_account import Credentials
 import pytz
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Diário Intestinal V24", page_icon="💩", layout="wide")
+st.set_page_config(page_title="Diário Intestinal V25", page_icon="💩", layout="wide")
 st.title("💩 Rastreador de Saúde")
 FUSO_BR = pytz.timezone('America/Sao_Paulo')
 
@@ -117,9 +117,17 @@ def carregar_dados_nuvem():
         df = pd.DataFrame(dados)
         if df.empty: return pd.DataFrame(), lista_completa_selecao, lista_alim, lista_sint, receitas
 
-        # Limpeza Numérica
-        cols_interesse = [c for c in df.columns if c in lista_alim or c in LISTA_RASTREADORES]
-        for col in cols_interesse: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        # --- CORREÇÃO DO ERRO ---
+        # Definimos todas as colunas que DEVEM ser números: Alimentos Puros + Rastreadores + NOMES DAS RECEITAS
+        cols_numericas = lista_alim + LISTA_RASTREADORES + list(receitas.keys())
+        
+        # Filtra apenas as que existem no DataFrame
+        cols_para_converter = [c for c in df.columns if c in cols_numericas]
+        
+        for col in cols_para_converter:
+            # Força conversão para número, transformando texto em NaN e depois em 0
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        # -------------------------
         
         if 'Circunferencia_Cintura' in df.columns: df['Circunferencia_Cintura'] = pd.to_numeric(df['Circunferencia_Cintura'], errors='coerce')
         if 'Circunferencia_Abdominal' in df.columns: df['Circunferencia_Abdominal'] = pd.to_numeric(df['Circunferencia_Abdominal'], errors='coerce')
@@ -340,6 +348,7 @@ with aba_geral:
                 # COMIDA
                 alimentos_dia = set()
                 for col in df.columns:
+                    # Incluindo Receitas na exibição
                     if (col in lista_alim_pura or col in lista_display or col in LISTA_RASTREADORES):
                         if df_dia[col].sum() > 0:
                             alimentos_dia.add(col)
