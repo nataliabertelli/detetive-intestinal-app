@@ -9,7 +9,7 @@ from google.oauth2.service_account import Credentials
 import pytz
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Diário Intestinal V20", page_icon="💩", layout="wide")
+st.set_page_config(page_title="Diário Intestinal V22", page_icon="💩", layout="wide")
 st.title("💩 Rastreador de Saúde")
 FUSO_BR = pytz.timezone('America/Sao_Paulo')
 
@@ -39,22 +39,16 @@ def verificar_e_criar_colunas(sheet_dados, novos_headers):
     """Garante que existem colunas para os itens novos na aba de Dados."""
     if not novos_headers: return
     headers = sheet_dados.row_values(1)
-    
-    # Filtra apenas o que realmente não existe
     reais_novos = [h for h in novos_headers if h not in headers]
     
     if reais_novos:
         col_atual = len(headers)
-        # Se precisar, expande a planilha
         if col_atual + len(reais_novos) > sheet_dados.col_count:
             sheet_dados.add_cols(len(reais_novos) + 5)
-        
-        # Adiciona os headers na primeira linha
         cell_range = f"{gspread.utils.rowcol_to_a1(1, col_atual + 1)}:{gspread.utils.rowcol_to_a1(1, col_atual + len(reais_novos))}"
         sheet_dados.update(cell_range, [reais_novos])
 
 def gerenciar_listas_config(workbook):
-    """Lê Alimentos e Sintomas da aba Config."""
     try:
         try: sheet = workbook.worksheet("Config")
         except: 
@@ -64,7 +58,6 @@ def gerenciar_listas_config(workbook):
         vals_alim = sheet.col_values(1)[1:]
         vals_sint = sheet.col_values(2)[1:]
         
-        # Inicialização se vazio
         if not vals_alim:
             sheet.update(f"A2:A{len(LISTA_ALIM_BACKUP)+1}", [[x] for x in LISTA_ALIM_BACKUP])
             vals_alim = LISTA_ALIM_BACKUP
@@ -80,39 +73,43 @@ def gerenciar_listas_config(workbook):
         return LISTA_ALIM_BACKUP, LISTA_SINT_BACKUP, None
 
 def obter_receitas(workbook):
-    """Lê receitas cadastradas."""
+    """Lê receitas com distinção de ingredientes principais e menores."""
     try:
         try: sheet = workbook.worksheet("Receitas")
         except: 
-            sheet = workbook.add_worksheet(title="Receitas", rows=100, cols=3)
-            sheet.update("A1:C1", [["NomeReceita", "Ingredientes", "Rastreadores"]])
+            sheet = workbook.add_worksheet(title="Receitas", rows=100, cols=4)
+            # Nova estrutura de colunas
+            sheet.update("A1:D1", [["NomeReceita", "IngredientesPrincipais", "IngredientesMenores", "Rastreadores"]])
         
         records = sheet.get_all_records()
         receitas = {}
         for row in records:
             if row['NomeReceita']:
-                ingreds = [x.strip().upper() for x in str(row['Ingredientes']).split(',') if x.strip()]
+                main = [x.strip().upper() for x in str(row['IngredientesPrincipais']).split(',') if x.strip()]
+                # Verifica se a coluna existe (compatibilidade)
+                minor_raw = row.get('IngredientesMenores', '')
+                minor = [x.strip().upper() for x in str(minor_raw).split(',') if x.strip()]
+                
                 trackers = [x.strip().upper() for x in str(row.get('Rastreadores', '')).split(',') if x.strip()]
-                # Receita guarda: [Lista de Ingredientes, Lista de Rastreadores]
-                receitas[row['NomeReceita'].upper()] = {'ingreds': ingreds, 'trackers': trackers}
+                
+                receitas[row['NomeReceita'].upper()] = {
+                    'main': main, 
+                    'minor': minor, 
+                    'trackers': trackers
+                }
         return receitas, sheet
     except:
         return {}, None
 
 def cadastrar_item_config(novo_item, tipo, sheet_config, lista_atual):
-    """Adiciona item na Config e cria coluna se for Alimento."""
     item_clean = novo_item.strip().upper() if tipo == 'Alimentos' else novo_item.strip().title()
-    
-    if item_clean in lista_atual:
-        return False, "Item já existe."
+    if item_clean in lista_atual: return False, "Item já existe."
 
-    # 1. Adiciona na Config
     col_idx = 1 if tipo == 'Alimentos' else 2
     col_values = sheet_config.col_values(col_idx)
     prox_linha = len(col_values) + 1
     sheet_config.update_cell(prox_linha, col_idx, item_clean)
     
-    # 2. Se for Alimento, cria coluna na aba Dados
     if tipo == 'Alimentos':
         wb = sheet_config.spreadsheet
         verificar_e_criar_colunas(wb.sheet1, [item_clean])
@@ -125,7 +122,6 @@ def carregar_dados_nuvem():
     lista_alim, lista_sint, _ = gerenciar_listas_config(workbook)
     receitas, _ = obter_receitas(workbook)
     
-    # Lista combinada para exibição (Alimentos Puros + Nomes de Receitas)
     lista_completa_selecao = sorted(list(set(lista_alim + list(receitas.keys()))))
     
     try:
@@ -134,29 +130,24 @@ def carregar_dados_nuvem():
         if df.empty: return pd.DataFrame(), lista_completa_selecao, lista_alim, lista_sint, receitas
 
         # Limpeza Numérica
-        # Identifica colunas que são alimentos ou rastreadores
         cols_interesse = [c for c in df.columns if c in lista_alim or c in LISTA_RASTREADORES]
         for col in cols_interesse: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
-        if 'Circunferencia' in df.columns: df['Circunferencia'] = pd.to_numeric(df['Circunferencia'], errors='coerce')
+        # Novas colunas de medida
+        if 'Circunferencia_Cintura' in df.columns: 
+            df['Circunferencia_Cintura'] = pd.to_numeric(df['Circunferencia_Cintura'], errors='coerce')
+        if 'Circunferencia_Abdominal' in df.columns: 
+            df['Circunferencia_Abdominal'] = pd.to_numeric(df['Circunferencia_Abdominal'], errors='coerce')
+        # Compatibilidade com antiga 'Circunferencia' se existir
+        if 'Circunferencia' in df.columns and 'Circunferencia_Cintura' not in df.columns:
+             df['Circunferencia_Cintura'] = pd.to_numeric(df['Circunferencia'], errors='coerce')
+
         df['Escala de Bristol'] = pd.to_numeric(df['Escala de Bristol'], errors='coerce').fillna(0)
             
         df['DataHora'] = pd.to_datetime(df['Data'] + ' ' + df['Hora'], dayfirst=True, errors='coerce')
         df = df.dropna(subset=['DataHora']).sort_values(by='DataHora', ascending=False).reset_index(drop=True)
         
-        # Porto Seguro
-        df['Porto_Seguro'] = False
-        crise_mask = (df['Escala de Bristol'] >= 5)
-        df_cron = df.sort_values('DataHora').reset_index(drop=True)
-        for i in range(len(df_cron)):
-            if i < 3: continue
-            dt = df_cron.loc[i, 'DataHora']
-            inicio = dt - timedelta(days=3)
-            janela = df_cron[(df_cron['DataHora'] < dt) & (df_cron['DataHora'] >= inicio)]
-            if not janela.empty and not janela[crise_mask].any().any():
-                df_cron.loc[i, 'Porto_Seguro'] = True
-        
-        return df_cron, lista_completa_selecao, lista_alim, lista_sint, receitas
+        return df, lista_completa_selecao, lista_alim, lista_sint, receitas
     except Exception as e:
         st.error(f"Erro dados: {e}")
         return pd.DataFrame(), lista_completa_selecao, lista_alim, lista_sint, receitas
@@ -164,101 +155,94 @@ def carregar_dados_nuvem():
 df, lista_display, lista_alim_pura, lista_sint_pura, receitas_dict = carregar_dados_nuvem()
 
 # --- 4. INTERFACE ---
-aba_diario, aba_cadastros, aba_analise, aba_geral = st.tabs(["📝 Diário", "⚙️ Cadastros", "📊 Detetive", "🗂️ Histórico"])
+aba_diario, aba_cadastros, aba_geral, aba_analise = st.tabs(["📝 Diário", "⚙️ Cadastros", "🗂️ Histórico (Dias)", "📊 Detetive"])
 
 # ==============================================================================
-# ABA: CADASTROS (A COZINHA - Configuração)
+# ABA: CADASTROS (A COZINHA)
 # ==============================================================================
 with aba_cadastros:
     st.header("Central de Cadastros")
-    st.caption("Aqui você ensina ao programa o que são seus alimentos e sintomas.")
-
-    c_new1, c_new2 = st.columns(2)
     
-    # 1. NOVO ALIMENTO PURO
-    with c_new1:
-        with st.container(border=True):
-            st.subheader("🍎 Novo Alimento Puro")
-            st.caption("Ex: Farinha de Teff, Cuscuz, Ora-pro-nóbis")
-            novo_alim_txt = st.text_input("Nome do Alimento").upper()
+    # 1. Cadastro Rápido de Itens Simples
+    with st.expander("Cadastrar Novos Itens Básicos", expanded=False):
+        c_new1, c_new2 = st.columns(2)
+        with c_new1:
+            novo_alim_txt = st.text_input("Novo Alimento Puro (ex: Ovo)").upper()
             if st.button("Salvar Alimento"):
                 if novo_alim_txt:
                     wb = conectar_google_sheets()
                     _, _, sheet_cfg = gerenciar_listas_config(wb)
                     ok, msg = cadastrar_item_config(novo_alim_txt, 'Alimentos', sheet_cfg, lista_alim_pura)
-                    if ok: 
-                        st.success(msg)
-                        st.cache_data.clear()
-                        st.rerun()
+                    if ok: st.success(msg); st.cache_data.clear(); st.rerun()
                     else: st.warning(msg)
-
-    # 2. NOVO SINTOMA
-    with c_new2:
-        with st.container(border=True):
-            st.subheader("⚠️ Novo Sintoma")
-            st.caption("Ex: Enxaqueca, Aftas")
-            novo_sint_txt = st.text_input("Nome do Sintoma").title()
+        with c_new2:
+            novo_sint_txt = st.text_input("Novo Sintoma (ex: Aftas)").title()
             if st.button("Salvar Sintoma"):
                 if novo_sint_txt:
                     wb = conectar_google_sheets()
                     _, _, sheet_cfg = gerenciar_listas_config(wb)
                     ok, msg = cadastrar_item_config(novo_sint_txt, 'Sintomas', sheet_cfg, lista_sint_pura)
-                    if ok: 
-                        st.success(msg)
-                        st.cache_data.clear()
-                        st.rerun()
+                    if ok: st.success(msg); st.cache_data.clear(); st.rerun()
                     else: st.warning(msg)
 
     st.divider()
 
-    # 3. NOVA RECEITA (Mestre)
+    # 2. NOVA RECEITA INTELIGENTE
     with st.container(border=True):
-        st.subheader("🧑‍🍳 Nova Receita / Prato Composto")
-        st.info("Cadastre o título (ex: PÃO DE QUEIJO) e o que tem dentro dele. No dia a dia, basta selecionar o título.")
+        st.subheader("🧑‍🍳 Nova Receita Inteligente")
+        st.info("Separe o que é base (aumenta com a porção) do que é traço/tempero (fixo).")
         
-        with st.form("form_receita_mestre"):
-            nome_rec = st.text_input("Nome da Receita (TÍTULO)").upper()
+        with st.form("form_receita_v22"):
+            nome_rec = st.text_input("Nome do Prato (TÍTULO)").upper()
             
-            c_ing, c_track = st.columns(2)
-            with c_ing:
-                # Mostra apenas alimentos puros para compor a receita
-                ingreds_rec = st.multiselect("Ingredientes Base", lista_alim_pura)
+            c_base, c_traco = st.columns(2)
+            with c_base:
+                st.markdown("🧱 **Base (Aumenta com a quantidade)**")
+                st.caption("Ex: Farinha, Ovos, Leite. Se comer muito prato, come muito disso.")
+                ingreds_main = st.multiselect("Ingredientes Base", lista_alim_pura)
             
-            with c_track:
-                st.markdown("**Contém (Rastreadores):**")
-                trackers_selecionados = []
-                for t in LISTA_RASTREADORES:
-                    if st.checkbox(t, key=f"track_{t}"): trackers_selecionados.append(t)
+            with c_traco:
+                st.markdown("🧂 **Temperos/Traços (Fixo)**")
+                st.caption("Ex: Fermento, Sal, Óleo de untar. Sempre será 'Pouco'.")
+                ingreds_minor = st.multiselect("Ingredientes Traço", lista_alim_pura)
+
+            st.markdown("---")
+            st.markdown("🔍 **Rastreadores Ocultos (Sempre presentes):**")
+            trackers_selecionados = []
+            cols_track = st.columns(4)
+            for i, t in enumerate(LISTA_RASTREADORES):
+                with cols_track[i % 4]:
+                    if st.checkbox(t, key=f"rec_track_{t}"): trackers_selecionados.append(t)
             
             if st.form_submit_button("Salvar Receita"):
-                if nome_rec and (ingreds_rec or trackers_selecionados):
+                if nome_rec and (ingreds_main or ingreds_minor):
                     wb = conectar_google_sheets()
                     _, sheet_rec = obter_receitas(wb)
                     
-                    # Salva: Nome | Ingredientes (sep ,) | Rastreadores (sep ,)
-                    str_ing = ",".join(ingreds_rec)
+                    str_main = ",".join(ingreds_main)
+                    str_minor = ",".join(ingreds_minor)
                     str_track = ",".join(trackers_selecionados)
-                    sheet_rec.append_row([nome_rec, str_ing, str_track])
                     
-                    # Garante que os rastreadores existam como colunas na planilha de dados
-                    # para que possam ser contados quando a receita explodir
-                    if trackers_selecionados:
-                        verificar_e_criar_colunas(wb.sheet1, trackers_selecionados)
+                    sheet_rec.append_row([nome_rec, str_main, str_minor, str_track])
+                    
+                    # Garante colunas
+                    todos_novos = trackers_selecionados
+                    if todos_novos: verificar_e_criar_colunas(wb.sheet1, todos_novos)
 
                     st.success(f"Receita '{nome_rec}' salva!")
                     st.cache_data.clear()
                     st.rerun()
                 else:
-                    st.error("Preencha o nome e pelo menos um ingrediente ou rastreador.")
+                    st.error("Preencha o nome e ingredientes.")
 
 # ==============================================================================
-# ABA: DIÁRIO (A MESA - Dia a Dia)
+# ABA: DIÁRIO (A MESA)
 # ==============================================================================
 with aba_diario:
     st.header("Registro Diário")
     agora_br = datetime.now(FUSO_BR)
     
-    with st.form("form_diario_v20"):
+    with st.form("form_diario_v22"):
         c1, c2 = st.columns(2)
         with c1: data_input = st.date_input("📅 Data", agora_br)
         with c2: hora_input = st.time_input("🕒 Hora", agora_br)
@@ -269,24 +253,25 @@ with aba_diario:
         
         st.divider()
         
-        # Seleção de Alimentos (Mistura Puros e Receitas)
         with st.expander("🍎 O que você comeu?", expanded=True):
-            st.caption("Selecione Alimentos Simples ou Receitas já cadastradas.")
             cp, cm, cg = st.columns(3)
             with cp: sel_pouco = st.multiselect("Nível 1 (Pouco)", lista_display, key="d1")
             with cm: sel_medio = st.multiselect("Nível 2 (Normal)", lista_display, key="d2")
             with cg: sel_muito = st.multiselect("Nível 3 (Muito)", lista_display, key="d3")
             
-            st.markdown("---")
-            st.markdown("**Rastreadores Avulsos do Dia:**")
-            st.caption("Comeu algo fora da lista que tinha:")
-            comps_dia = st.multiselect("Adicionar Rastreador:", LISTA_RASTREADORES)
+            st.caption("Rastreadores avulsos do dia (fora da receita):")
+            comps_dia = st.multiselect("Adicionar:", LISTA_RASTREADORES)
 
-        with st.expander("💊 Sintomas & Corpo"):
+        with st.expander("💊 Sintomas & Medidas"):
             meds_sel = st.multiselect("Medicamentos:", LISTA_REMEDIOS_COMUNS)
             sintomas_sel = st.multiselect("Sintomas:", lista_sint_pura)
             st.markdown("---")
-            circunf = st.number_input("📏 Cintura (cm)", min_value=0.0, step=0.1, format="%.1f")
+            
+            cm1, cm2 = st.columns(2)
+            with cm1:
+                circ_cintura = st.number_input("📏 Cintura (Umbigo)", min_value=0.0, step=0.1, format="%.1f")
+            with cm2:
+                circ_abd = st.number_input("📏 Baixo Ventre (Pochete)", min_value=0.0, step=0.1, format="%.1f")
 
         st.divider()
         notas_input = st.text_area("Notas", placeholder="Obs...")
@@ -295,7 +280,6 @@ with aba_diario:
             wb = conectar_google_sheets()
             sheet = wb.sheet1
             
-            # PREPARAÇÃO DOS DADOS
             sintomas_finais = sintomas_sel
             bristol_save = bristol_escolhido if bristol_escolhido != "Nenhum" else ""
             
@@ -306,52 +290,62 @@ with aba_diario:
                 'Diarreia': 'S' if bristol_save != "" and bristol_save >= 5 else '',
                 'Características': ", ".join(sintomas_finais),
                 'Remédios': ", ".join(meds_sel),
-                'Circunferencia': circunf if circunf > 0 else '',
+                'Circunferencia_Cintura': circ_cintura if circ_cintura > 0 else '',
+                'Circunferencia_Abdominal': circ_abd if circ_abd > 0 else '',
                 'Notas': notas_input,
                 'Humor': ''
             }
             
-            # LÓGICA DE EXPLOSÃO (RECEITA -> INGREDIENTES + RASTREADORES)
+            # LÓGICA INTELIGENTE DE EXPLOSÃO
             ingredientes_processados = {} 
             
-            def processar_item(item, nivel):
-                # Se é receita
+            def processar_item(item, nivel_consumo):
                 if item in receitas_dict:
-                    # 1. Pega Ingredientes da Receita
-                    for ingred in receitas_dict[item]['ingreds']:
-                        ingredientes_processados[ingred] = max(ingredientes_processados.get(ingred, 0), nivel)
-                    # 2. Pega Rastreadores da Receita (Glúten, etc)
+                    # 1. Ingredientes BASE (Seguem o nível do consumo)
+                    for main in receitas_dict[item]['main']:
+                        ingredientes_processados[main] = max(ingredientes_processados.get(main, 0), nivel_consumo)
+                    
+                    # 2. Ingredientes MENORES (Sempre Nível 1, não importa o quanto comeu)
+                    for minor in receitas_dict[item]['minor']:
+                        ingredientes_processados[minor] = max(ingredientes_processados.get(minor, 0), 1)
+
+                    # 3. Rastreadores (Seguem nível do consumo - Se comeu mt pão, comeu mt gluten)
                     for track in receitas_dict[item]['trackers']:
-                        ingredientes_processados[track] = max(ingredientes_processados.get(track, 0), nivel)
-                    # 3. Também conta a Receita em si (Opcional, mas bom pra saber que comeu o prato)
-                    ingredientes_processados[item] = max(ingredientes_processados.get(item, 0), nivel)
+                        ingredientes_processados[track] = max(ingredientes_processados.get(track, 0), nivel_consumo)
+                    
+                    # 4. A Receita em si
+                    ingredientes_processados[item] = max(ingredientes_processados.get(item, 0), nivel_consumo)
                 else:
-                    # É alimento puro
-                    ingredientes_processados[item] = max(ingredientes_processados.get(item, 0), nivel)
+                    # Item puro segue o nível
+                    ingredientes_processados[item] = max(ingredientes_processados.get(item, 0), nivel_consumo)
 
             for item in sel_pouco: processar_item(item, 1)
             for item in sel_medio: processar_item(item, 2)
             for item in sel_muito: processar_item(item, 3)
-            for item in comps_dia: processar_item(item, 2) # Rastreadores avulsos entram como nível 2
+            for item in comps_dia: processar_item(item, 2)
 
-            # Atualiza valores_input
-            for ingred, nivel in ingredientes_processados.items():
-                valores_input[ingred] = nivel
+            for ingred, nivel in ingredientes_processados.items(): valores_input[ingred] = nivel
             
             # SALVAMENTO
             headers = sheet.row_values(1)
             nova_linha = []
             
-            # Verifica se algum ingrediente explodido não tem coluna (segurança)
-            chaves_faltantes = [k for k in valores_input.keys() if k not in headers and k not in ['Data','Hora','Escala de Bristol','Diarreia','Características','Remédios','Circunferencia','Notas','Humor']]
+            # Cria colunas de medidas se faltarem
+            cols_medidas = ['Circunferencia_Cintura', 'Circunferencia_Abdominal']
+            cols_faltantes_medidas = [c for c in cols_medidas if c not in headers]
+            if cols_faltantes_medidas:
+                verificar_e_criar_colunas(sheet, cols_faltantes_medidas)
+                headers = sheet.row_values(1)
+
+            # Cria colunas de ingredientes se faltarem
+            chaves_faltantes = [k for k in valores_input.keys() if k not in headers]
             if chaves_faltantes:
                 verificar_e_criar_colunas(sheet, chaves_faltantes)
-                headers = sheet.row_values(1) # Atualiza headers
+                headers = sheet.row_values(1)
             
             for h in headers:
                 if h in valores_input: nova_linha.append(valores_input[h])
-                elif h in lista_alim_pura or h in lista_display or h in LISTA_RASTREADORES: 
-                     nova_linha.append(valores_input.get(h, 0))
+                elif h in lista_alim_pura or h in lista_display or h in LISTA_RASTREADORES: nova_linha.append(valores_input.get(h, 0))
                 else: nova_linha.append("")
             
             sheet.append_row(nova_linha)
@@ -359,17 +353,55 @@ with aba_diario:
             st.cache_data.clear()
             st.rerun()
 
-# --- ABAS DE ANÁLISE (Mantidas Iguais) ---
+# ABA GERAL (Atualizada com gráficos duplos)
 with aba_geral:
-    st.header("Histórico Recente")
-    if not df.empty:
-        for idx, row in df.head(10).iterrows():
-            with st.container():
-                bristol_txt = f"💩 B{int(row['Escala de Bristol'])}" if row['Escala de Bristol'] > 0 else ""
-                st.markdown(f"**{row['Data']}** {bristol_txt} | {row['Características']}")
-                comidos = [c for c in df.columns if (c in lista_display or c in LISTA_RASTREADORES) and row.get(c, 0) > 0]
-                st.caption(", ".join(comidos))
-                st.divider()
+    st.header("Diário de Bordo")
+    
+    # Gráfico de Medidas
+    if not df.empty and ('Circunferencia_Cintura' in df.columns or 'Circunferencia_Abdominal' in df.columns):
+        st.subheader("📏 Evolução de Medidas")
+        df_medidas = df.copy()
+        df_medidas = df_medidas.set_index('DataHora').sort_index()
+        cols_plot = []
+        if 'Circunferencia_Cintura' in df_medidas.columns: cols_plot.append('Circunferencia_Cintura')
+        if 'Circunferencia_Abdominal' in df_medidas.columns: cols_plot.append('Circunferencia_Abdominal')
+        
+        # Plota apenas valores > 0
+        if cols_plot:
+            st.line_chart(df_medidas[cols_plot].replace(0, None))
 
-with aba_analise:
-    st.info("Utilize a aba Geral para ver os dados brutos ou aguarde a coleta de mais dados para usar o Detetive.")
+    st.divider()
+    
+    if not df.empty:
+        dias_unicos = sorted(df['DataHora'].dt.date.unique(), reverse=True)
+        for dia in dias_unicos[:20]:
+            df_dia = df[df['DataHora'].dt.date == dia]
+            with st.container(border=True):
+                dia_semana = dia.strftime("%A")
+                dias_pt = {'Monday':'Seg', 'Tuesday':'Ter', 'Wednesday':'Qua', 'Thursday':'Qui', 'Friday':'Sex', 'Saturday':'Sáb', 'Sunday':'Dom'}
+                dia_str = dias_pt.get(dia_semana, dia_semana)
+                
+                st.markdown(f"### 🗓️ {dia.strftime('%d/%m/%Y')} ({dia_str})")
+                
+                bristols_dia = df_dia[df_dia['Escala de Bristol'] > 0]['Escala de Bristol'].tolist()
+                if bristols_dia:
+                    bristols_txt = ", ".join([str(int(b)) for b in bristols_dia])
+                    cor_status = "red" if any(b >= 5 for b in bristols_dia) else "green"
+                    st.markdown(f":{cor_status}[**Evacuações:** {len(bristols_dia)}x (Bristol: {bristols_txt})]")
+                
+                # Resumo de Sintomas
+                sintomas_dia = []
+                for s in df_dia['Características']:
+                    if s: sintomas_dia.extend(s.split(','))
+                sintomas_dia = list(set([x.strip() for x in sintomas_dia if x.strip()]))
+                if sintomas_dia: st.markdown(f"⚠️ **Sintomas:** {', '.join(sintomas_dia)}")
+
+                # Resumo de Medidas
+                medidas_txt = []
+                if 'Circunferencia_Cintura' in df_dia.columns:
+                     cint_max = df_dia['Circunferencia_Cintura'].max()
+                     if cint_max > 0: medidas_txt.append(f"Cintura: {cint_max}")
+                if 'Circunferencia_Abdominal' in df_dia.columns:
+                     abd_max = df_dia['Circunferencia_Abdominal'].max()
+                     if abd_max > 0: medidas_txt.append(f"Ventre: {abd_max}")
+                if medidas_txt: st.caption(" | ".join(medidas_txt))
