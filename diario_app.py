@@ -6,15 +6,18 @@ import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 import gspread
 from google.oauth2.service_account import Credentials
+import pytz # Novo para fuso horário
 
-# --- 1. CONFIGURAÇÃO DA PÁGINA teste ---
-st.set_page_config(page_title="Diário Intestinal V16", page_icon="💩", layout="wide")
+# --- 1. CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="Diário Intestinal V17", page_icon="💩", layout="wide")
 st.title("💩 Rastreador de Saúde")
+
+# Configuração de Fuso Horário (GMT-3)
+FUSO_BR = pytz.timezone('America/Sao_Paulo')
 
 # --- 2. CONFIGURAÇÃO GOOGLE SHEETS ---
 NOME_PLANILHA = "Diario_Intestinal_DB" 
 
-# Listas Padrão
 LISTA_PADRAO_BACKUP = [
     'OVO', 'BANANA', 'ARROZ', 'TAPIOCA', 'FRANGO', 'AVEIA', 
     'CENOURA', 'TOMATE', 'CARNE', 'INHAME', 'ABOBRINHA', 
@@ -35,11 +38,11 @@ LISTA_SINTOMAS_COMUNS = [
 ]
 
 LISTA_REMEDIOS_COMUNS = [
-    'Buscopan', 'Simeticona', 'Probiótico', 'Lactase', 
+    'Buscopan', 'Simeticona', 'Probiótico', 'Enzima Lactase', 
     'Mesalazina', 'Antialérgico', 'Analgésico', 'Carvão Ativado'
 ]
 
-# --- 3. CONEXÃO E FUNÇÕES DO BANCO ---
+# --- 3. CONEXÃO E FUNÇÕES ---
 @st.cache_resource
 def conectar_google_sheets():
     scopes = [
@@ -80,31 +83,19 @@ def adicionar_novo_alimento(novo_alimento, workbook):
     novo_alimento = novo_alimento.strip().upper()
     try:
         lista_atual, sheet_config = obter_lista_alimentos(workbook)
-        
-        if novo_alimento in lista_atual:
-            return False, "Alimento já existe!"
+        if novo_alimento in lista_atual: return False, "Alimento já existe!"
 
-        # 1. Adiciona na aba Config
         sheet_config.append_row([novo_alimento])
-        
-        # 2. Adiciona coluna na aba principal (Dados)
         sheet_dados = workbook.sheet1
         headers = sheet_dados.row_values(1)
         
         if novo_alimento not in headers:
-            # CORREÇÃO DO ERRO DE LIMITE DE COLUNAS:
-            # Verifica se precisa adicionar mais colunas na planilha antes de escrever
             num_cols_atual = sheet_dados.col_count
             nova_posicao = len(headers) + 1
-            
-            if nova_posicao > num_cols_atual:
-                # Adiciona 5 colunas extras para garantir espaço
-                sheet_dados.add_cols(5)
-                
-            # Agora é seguro escrever
+            if nova_posicao > num_cols_atual: sheet_dados.add_cols(5)
             sheet_dados.update_cell(1, nova_posicao, novo_alimento)
             
-        return True, f"✅ '{novo_alimento}' cadastrado com sucesso!"
+        return True, f"✅ '{novo_alimento}' cadastrado!"
     except Exception as e:
         return False, f"Erro ao salvar: {e}"
 
@@ -116,7 +107,6 @@ def carregar_dados_nuvem():
     try:
         dados = sheet.get_all_records()
         df = pd.DataFrame(dados)
-        
         if df.empty: return pd.DataFrame(), lista_alimentos_dinamica
 
         cols_alim = [c for c in df.columns if c in lista_alimentos_dinamica]
@@ -126,7 +116,7 @@ def carregar_dados_nuvem():
         if 'Circunferencia' in df.columns:
             df['Circunferencia'] = pd.to_numeric(df['Circunferencia'], errors='coerce')
         
-        df['Escala de Bristol'] = pd.to_numeric(df['Escala de Bristol'], errors='coerce')
+        df['Escala de Bristol'] = pd.to_numeric(df['Escala de Bristol'], errors='coerce').fillna(0)
             
         df['DataHora'] = pd.to_datetime(df['Data'] + ' ' + df['Hora'], dayfirst=True, errors='coerce')
         df = df.dropna(subset=['DataHora'])
@@ -135,103 +125,100 @@ def carregar_dados_nuvem():
         # Porto Seguro
         df['Porto_Seguro'] = False
         crise_mask = (df['Escala de Bristol'] >= 5)
-        
         for i in range(len(df)):
             if i < 3: continue
             data_atual = df.loc[i, 'DataHora']
             data_limite_inicio = data_atual - timedelta(days=3)
             df_janela = df[(df['DataHora'] < data_atual) & (df['DataHora'] >= data_limite_inicio)]
-            
             if not df_janela.empty and not df_janela[crise_mask].any().any():
                 df.loc[i, 'Porto_Seguro'] = True
                     
         return df, lista_alimentos_dinamica
-        
     except Exception as e:
         st.error(f"Erro ao processar dados: {e}")
         return pd.DataFrame(), lista_alimentos_dinamica
 
-# Carregamento Inicial
 df, lista_alimentos_dinamica = carregar_dados_nuvem()
 
 # --- 4. INTERFACE ---
-aba_inserir, aba_analise, aba_geral, aba_dados = st.tabs(["📥 Inserir", "📊 Detetive", "📈 Geral", "📝 Brutos"])
+aba_inserir, aba_analise, aba_geral, aba_dados = st.tabs(["📥 Inserir", "📊 Detetive", "📈 Geral", "📝 Resumo Diário"])
 
 # --- ABA 0: INSERIR ---
 with aba_inserir:
     st.header("Novo Registro")
     
-    with st.form("form_entrada_nuvem"):
+    # Define horário de Brasília
+    agora_br = datetime.now(FUSO_BR)
+    
+    with st.form("form_entrada_v17"):
         # 1. QUANDO?
         c1, c2 = st.columns(2)
-        with c1: data_input = st.date_input("📅 Data", datetime.now())
-        with c2: hora_input = st.time_input("🕒 Hora", datetime.now())
+        with c1: data_input = st.date_input("📅 Data", agora_br)
+        with c2: hora_input = st.time_input("🕒 Hora", agora_br) # Agora já vem certo!
 
         st.divider()
 
-        # 2. O PRINCIPAL: COCÔ (Fora do expander para acesso rápido)
-        st.subheader("💩 Teve evacuação?")
-        col_coco_check, col_coco_slider = st.columns([1, 3])
+        # 2. ESCALA DE BRISTOL (Direto e Fácil)
+        st.subheader("💩 Escala de Bristol")
+        st.caption("Se não houve evacuação, não selecione nada (deixe vazio).")
         
-        with col_coco_check:
-            teve_coco = st.checkbox("Sim, fui ao banheiro", value=False)
+        # Usamos radio horizontal para simular botões 1-7
+        # Adicionamos uma opção 'Nenhum' para quando não for ao banheiro
+        opcoes_bristol = ["Nenhum"] + [1, 2, 3, 4, 5, 6, 7]
+        bristol_escolhido = st.radio(
+            "Selecione o tipo:", 
+            opcoes_bristol, 
+            horizontal=True,
+            index=0 # Padrão é Nenhum
+        )
         
-        bristol_input = ""
-        if teve_coco:
-            with col_coco_slider:
-                st.info("Deslize para classificar:")
-                bristol_input = st.slider("Escala de Bristol", 1, 7, 4, label_visibility="collapsed")
-                # Explicativo rápido
-                if bristol_input <= 2: st.caption("Constipação")
-                elif bristol_input <= 4: st.caption("Ideal")
-                else: st.caption("Tendência à Diarreia")
-        
+        # Feedback visual imediato do que significa o número
+        if bristol_escolhido != "Nenhum":
+            if bristol_escolhido <= 2: st.warning("Constipação")
+            elif bristol_escolhido <= 4: st.success("Ideal / Normal")
+            elif bristol_escolhido == 5: st.warning("Tendência à Diarreia (Faltando fibras?)")
+            else: st.error("Diarreia / Inflamação")
+
         st.divider()
 
-        # 3. ALIMENTOS E OUTROS (Nos expanders para não poluir)
-        with st.expander("🍎 O que você comeu?", expanded=True):
+        # 3. ALIMENTOS
+        with st.expander("🍎 Alimentação", expanded=True):
             cp, cm, cg = st.columns(3)
             with cp:
                 st.markdown("🤏 **Pouco (1)**")
-                sel_pouco = st.multiselect("Nível 1", lista_alimentos_dinamica, key="s1")
+                sel_pouco = st.multiselect("Nível 1", lista_alimentos_dinamica, key="s1", label_visibility="collapsed")
             with cm:
                 st.markdown("🍽️ **Normal (2)**")
-                sel_medio = st.multiselect("Nível 2", lista_alimentos_dinamica, key="s2")
+                sel_medio = st.multiselect("Nível 2", lista_alimentos_dinamica, key="s2", label_visibility="collapsed")
             with cg:
                 st.markdown("🚀 **Muito (3)**")
-                sel_muito = st.multiselect("Nível 3", lista_alimentos_dinamica, key="s3")
+                sel_muito = st.multiselect("Nível 3", lista_alimentos_dinamica, key="s3", label_visibility="collapsed")
             
-            # Novo Alimento Rápido dentro do fluxo
-            novo_alim_fast = st.text_input("Não achou? Digite para cadastrar (Enter para salvar)", placeholder="Ex: Cuscuz").upper()
+            # Cadastro Rápido
+            st.markdown("---")
+            novo_alim_fast = st.text_input("➕ Cadastrar Novo Alimento (Digite e salve para criar)", placeholder="Ex: Cuscuz").upper()
 
-        with st.expander("💊 Medicamentos & Sintomas & Corpo"):
+        # 4. EXTRAS
+        with st.expander("💊 Medicamentos & Sintomas"):
             meds_sel = st.multiselect("Medicamentos:", LISTA_REMEDIOS_COMUNS)
             meds_extra = st.text_input("Outros Remédios:", placeholder="Ex: Vitamina D")
-            
             st.markdown("---")
             sintomas_sel = st.multiselect("Sintomas:", LISTA_SINTOMAS_COMUNS)
-            
             st.markdown("---")
             circunf = st.number_input("📏 Cintura (cm)", min_value=0.0, step=0.1, format="%.1f")
 
         st.divider()
         notas_input = st.text_area("Notas / Observações", placeholder="Como você se sentiu?")
         
-        # Botão de Salvar Grande
         enviou = st.form_submit_button("💾 SALVAR REGISTRO", type="primary", use_container_width=True)
 
         if enviou:
             wb = conectar_google_sheets()
             
-            # Se tiver novo alimento para cadastrar na hora
+            # Cadastro de novo alimento (se houver)
             if novo_alim_fast:
-                sucesso, msg = adicionar_novo_alimento(novo_alim_fast, wb)
-                if sucesso: st.toast(msg)
-                else: st.error(msg)
-                # Recarrega a lista para o salvamento atual funcionar se possível, 
-                # mas idealmente o usuário cadastra e depois salva.
-                # Vamos seguir salvando o registro normal.
-
+                adicionar_novo_alimento(novo_alim_fast, wb)
+            
             sheet = wb.sheet1
             if sheet:
                 try:
@@ -242,13 +229,14 @@ with aba_inserir:
                     if meds_extra: str_remedios += f", {meds_extra}" if str_remedios else meds_extra
                     str_sintomas = ", ".join(sintomas_sel)
                     
-                    bristol_save = bristol_input if teve_coco else ""
+                    # Lógica do Bristol
+                    bristol_save = bristol_escolhido if bristol_escolhido != "Nenhum" else ""
 
                     valores_input = {
                         'Data': data_input.strftime('%d/%m/%Y'),
                         'Hora': hora_input.strftime('%H:%M'),
                         'Escala de Bristol': bristol_save,
-                        'Diarreia': 'S' if bristol_save != "" and isinstance(bristol_input, int) and bristol_input >= 5 else '',
+                        'Diarreia': 'S' if bristol_save != "" and bristol_save >= 5 else '',
                         'Características': str_sintomas,
                         'Remédios': str_remedios,
                         'Circunferencia': circunf if circunf > 0 else '',
@@ -256,25 +244,21 @@ with aba_inserir:
                         'Humor': ''
                     }
                     
+                    # Preenche alimentos
                     for item in sel_pouco: valores_input[item] = 1
                     for item in sel_medio: valores_input[item] = 2
                     for item in sel_muito: valores_input[item] = 3
-                    # Se cadastrou novo alimento agora, tenta salvar ele como nível 2 se não foi selecionado
-                    if novo_alim_fast and novo_alim_fast not in valores_input:
-                         valores_input[novo_alim_fast] = 2 
+                    if novo_alim_fast and novo_alim_fast not in valores_input: valores_input[novo_alim_fast] = 2
                     
-                    # Preenche a linha respeitando a ordem das colunas no Sheets
-                    # Se houver uma coluna nova criada agora, o headers precisa ser atualizado
-                    # Re-lê headers para garantir
+                    # Atualiza headers caso tenha entrado alimento novo
                     headers_atualizados = sheet.row_values(1)
-                    
                     for h in headers_atualizados:
                         if h in valores_input: nova_linha.append(valores_input[h])
                         elif h in lista_alimentos_dinamica: nova_linha.append(valores_input.get(h, 0))
                         else: nova_linha.append("")
                     
                     sheet.append_row(nova_linha)
-                    st.success("✅ Salvo com sucesso!")
+                    st.success("✅ Registro Salvo com Sucesso!")
                     st.cache_data.clear()
                     st.rerun()
 
@@ -286,6 +270,41 @@ if df.empty:
     st.stop()
 
 df_analise = df[df['Porto_Seguro'] == True].copy()
+
+# --- ABA 4: RESUMO DIÁRIO (NOVA VISUALIZAÇÃO) ---
+with aba_dados:
+    st.header("Histórico (Lista Corrida)")
+    st.caption("Visualização simplificada. Para editar dados, acesse o Google Sheets.")
+    
+    # Criar visualização amigável
+    if not df.empty:
+        for idx, row in df.sort_values(by='DataHora', ascending=False).iterrows():
+            with st.container():
+                # Título da Linha: Data e Bristol
+                bristol_display = f"💩 Bristol {int(row['Escala de Bristol'])}" if row['Escala de Bristol'] > 0 else ""
+                st.markdown(f"**{row['Data']} - {row['Hora']}** {bristol_display}")
+                
+                # Alimentos consumidos nesta entrada
+                alimentos_consumidos = []
+                for alim in lista_alimentos_dinamica:
+                    if alim in df.columns and row[alim] > 0:
+                        qtd = int(row[alim])
+                        nivel = "Pouco" if qtd == 1 else "Muito" if qtd == 3 else "Normal"
+                        alimentos_consumidos.append(f"{alim} ({nivel})")
+                
+                if alimentos_consumidos:
+                    st.text(f"🍽️ {', '.join(alimentos_consumidos)}")
+                
+                # Sintomas e Remédios
+                detalhes = []
+                if row['Características']: detalhes.append(f"⚠️ {row['Características']}")
+                if row['Remédios']: detalhes.append(f"💊 {row['Remédios']}")
+                if row['Notas']: detalhes.append(f"📝 {row['Notas']}")
+                
+                for det in detalhes:
+                    st.write(det)
+                
+                st.divider()
 
 # --- ABA 1: DETETIVE ---
 with aba_analise:
@@ -382,5 +401,3 @@ with aba_geral:
             fig.patch.set_facecolor('black')
             ax.imshow(wc); ax.axis('off')
             st.pyplot(fig)
-
-with aba_dados: st.dataframe(df.sort_values(by='DataHora', ascending=False), use_container_width=True)
