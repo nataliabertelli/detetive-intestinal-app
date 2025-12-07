@@ -19,7 +19,7 @@ NOME_PLANILHA = "Diario_Intestinal_DB"
 # Listas de Backup e Constantes
 LISTA_ALIM_BACKUP = ['ARROZ', 'FEIJÃO', 'OVO', 'FRANGO', 'CAFÉ', 'BANANA', 'GLÚTEN', 'LACTOSE', 'FRITURA']
 LISTA_SINT_BACKUP = ['Estufamento', 'Gases', 'Cólica', 'Dor Abdominal']
-LISTA_REMEDIOS_COMUNS = ['Buscopan', 'Simeticona', 'Probiótico', 'Enzima Lactase']
+LISTA_REMEDIOS_COMUNS = ['Buscopan', 'Simeticona', 'Probiótico', 'Lactase', 'Carvão']
 LISTA_RASTREADORES = ['GLÚTEN', 'LACTOSE', 'FRITURA', 'AÇÚCAR', 'CAFEÍNA', 'ÁLCOOL', 'LEITE DE VACA']
 
 # --- 3. FUNÇÕES DE BANCO DE DADOS E LÓGICA ---
