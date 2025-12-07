@@ -7,7 +7,7 @@ from wordcloud import WordCloud
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- 1. CONFIGURAÇÃO DA PÁGINA ---
+# --- 1. CONFIGURAÇÃO DA PÁGINA teste ---
 st.set_page_config(page_title="Diário Intestinal V16", page_icon="💩", layout="wide")
 st.title("💩 Rastreador de Saúde")
 
@@ -35,7 +35,7 @@ LISTA_SINTOMAS_COMUNS = [
 ]
 
 LISTA_REMEDIOS_COMUNS = [
-    'Buscopan', 'Simeticona', 'Probiótico', 'Enzima Lactase', 
+    'Buscopan', 'Simeticona', 'Probiótico', 'Lactase', 
     'Mesalazina', 'Antialérgico', 'Analgésico', 'Carvão Ativado'
 ]
 
