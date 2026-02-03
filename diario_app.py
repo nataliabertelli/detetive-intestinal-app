@@ -48,30 +48,40 @@ def verificar_e_criar_colunas(sheet_dados, novos_headers):
         sheet_dados.update(cell_range, [reais_novos])
 
 def gerenciar_listas_config(workbook):
-    """Lê listas básicas de Alimentos e Sintomas."""
+    """Lê listas de Alimentos, Sintomas e MEDICAMENTOS."""
     try:
         try: sheet = workbook.worksheet("Config")
         except: 
             sheet = workbook.add_worksheet(title="Config", rows=100, cols=5)
-            sheet.update("A1:B1", [["Alimentos", "Sintomas"]])
+            # Agora criamos 3 colunas de cabeçalho
+            sheet.update("A1:C1", [["Alimentos", "Sintomas", "Medicamentos"]])
         
         vals_alim = sheet.col_values(1)[1:]
         vals_sint = sheet.col_values(2)[1:]
+        vals_meds = sheet.col_values(3)[1:] # Nova leitura da coluna 3
         
-        # Inicializa se vazio
+        # Inicializa se vazio (com backups)
         if not vals_alim:
             sheet.update(f"A2:A{len(LISTA_ALIM_BACKUP)+1}", [[x] for x in LISTA_ALIM_BACKUP])
             vals_alim = LISTA_ALIM_BACKUP
         if not vals_sint:
             sheet.update(f"B2:B{len(LISTA_SINT_BACKUP)+1}", [[x] for x in LISTA_SINT_BACKUP])
             vals_sint = LISTA_SINT_BACKUP
+        if not vals_meds:
+            # Se não tiver remédios na config, usa a lista padrão do código e salva lá
+            sheet.update(f"C2:C{len(LISTA_REMEDIOS_COMUNS)+1}", [[x] for x in LISTA_REMEDIOS_COMUNS])
+            vals_meds = LISTA_REMEDIOS_COMUNS
             
         vals_alim.sort()
         vals_sint.sort()
-        return vals_alim, vals_sint, sheet
+        vals_meds.sort()
+        
+        # RETORNA 4 VALORES AGORA (Alim, Sint, Meds, Planilha)
+        return vals_alim, vals_sint, vals_meds, sheet
     except Exception as e:
         st.error(f"Erro Config: {e}")
-        return LISTA_ALIM_BACKUP, LISTA_SINT_BACKUP, None
+        # Retorna lista padrão se der erro
+        return LISTA_ALIM_BACKUP, LISTA_SINT_BACKUP, LISTA_REMEDIOS_COMUNS, None
 
 def obter_receitas(workbook):
     """Lê receitas com estrutura Main/Minor/Trackers."""
@@ -95,15 +105,21 @@ def obter_receitas(workbook):
         return {}, None
 
 def cadastrar_item_config(novo_item, tipo, sheet_config, lista_atual):
-    """Salva novo item simples na aba Config."""
+    """Salva novo item na aba Config (Suporta Alimentos, Sintomas e Medicamentos)."""
     item_clean = novo_item.strip().upper() if tipo == 'Alimentos' else novo_item.strip().title()
     if item_clean in lista_atual: return False, "Item já existe."
 
-    col_idx = 1 if tipo == 'Alimentos' else 2
+    # Define a coluna correta (1=Alimentos, 2=Sintomas, 3=Medicamentos)
+    if tipo == 'Alimentos': col_idx = 1
+    elif tipo == 'Sintomas': col_idx = 2
+    elif tipo == 'Medicamentos': col_idx = 3 # Nova lógica
+    else: return False, "Tipo inválido"
+
     col_values = sheet_config.col_values(col_idx)
     prox_linha = len(col_values) + 1
     sheet_config.update_cell(prox_linha, col_idx, item_clean)
     
+    # Só cria coluna na aba de Dados se for ALIMENTO. Remédio não precisa de coluna nova.
     if tipo == 'Alimentos':
         wb = sheet_config.spreadsheet
         verificar_e_criar_colunas(wb.sheet1, [item_clean])
@@ -113,7 +129,13 @@ def cadastrar_item_config(novo_item, tipo, sheet_config, lista_atual):
 def carregar_dados_nuvem():
     workbook = conectar_google_sheets()
     sheet = workbook.sheet1
-    lista_alim, lista_sint, _ = gerenciar_listas_config(workbook)
+    
+    # MUDE ESTA LINHA (Adicione lista_meds)
+    lista_alim, lista_sint, lista_meds, _ = gerenciar_listas_config(workbook)
+    
+    # ADICIONE ESTA LINHA (Atualiza a lista global de remédios)
+    global LISTA_REMEDIOS_COMUNS
+    LISTA_REMEDIOS_COMUNS = lista_meds
     receitas, _ = obter_receitas(workbook)
     
     # Lista combinada para exibição nos selects (Puros + Receitas)
@@ -292,24 +314,42 @@ with aba_cadastros:
     st.header("Central de Cadastros")
     
     # 1. Itens Simples
+    # Bloco de Cadastros Simples
     with st.expander("Cadastrar Novos Itens Básicos", expanded=False):
-        c_new1, c_new2 = st.columns(2)
+        c_new1, c_new2, c_new3 = st.columns(3) # Agora são 3 colunas
+        
+        # Alimento
         with c_new1:
             novo_alim_txt = st.text_input("Novo Alimento Puro (ex: Ovo)").upper()
             if st.button("Salvar Alimento"):
                 if novo_alim_txt:
                     wb = conectar_google_sheets()
-                    _, _, sheet_cfg = gerenciar_listas_config(wb)
+                    # Note o _ extra para ignorar a lista de remédios aqui
+                    _, _, _, sheet_cfg = gerenciar_listas_config(wb)
                     ok, msg = cadastrar_item_config(novo_alim_txt, 'Alimentos', sheet_cfg, lista_alim_pura)
                     if ok: st.success(msg); st.cache_data.clear(); st.rerun()
                     else: st.warning(msg)
+        
+        # Sintoma
         with c_new2:
             novo_sint_txt = st.text_input("Novo Sintoma (ex: Aftas)").title()
             if st.button("Salvar Sintoma"):
                 if novo_sint_txt:
                     wb = conectar_google_sheets()
-                    _, _, sheet_cfg = gerenciar_listas_config(wb)
+                    _, _, _, sheet_cfg = gerenciar_listas_config(wb)
                     ok, msg = cadastrar_item_config(novo_sint_txt, 'Sintomas', sheet_cfg, lista_sint_pura)
+                    if ok: st.success(msg); st.cache_data.clear(); st.rerun()
+                    else: st.warning(msg)
+
+        # Medicamento (NOVO)
+        with c_new3:
+            novo_med_txt = st.text_input("Novo Medicamento").title()
+            if st.button("Salvar Medicamento"):
+                if novo_med_txt:
+                    wb = conectar_google_sheets()
+                    # Precisamos passar a lista atual de remédios para checar duplicidade
+                    _, _, lista_meds_atual, sheet_cfg = gerenciar_listas_config(wb)
+                    ok, msg = cadastrar_item_config(novo_med_txt, 'Medicamentos', sheet_cfg, lista_meds_atual)
                     if ok: st.success(msg); st.cache_data.clear(); st.rerun()
                     else: st.warning(msg)
 
