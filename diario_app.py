@@ -7,6 +7,7 @@ from wordcloud import WordCloud
 import gspread
 from google.oauth2.service_account import Credentials
 import pytz
+import matplotlib.dates as mdates
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Diário Intestinal V26", page_icon="💩", layout="wide")
@@ -204,8 +205,7 @@ def carregar_dados_nuvem():
 df, lista_display, lista_alim_pura, lista_sint_pura, receitas_dict = carregar_dados_nuvem()
 
 # --- 4. INTERFACE ---
-aba_diario, aba_cadastros, aba_historico, aba_analise = st.tabs(["📝 Diário", "⚙️ Cadastros", "🗂️ Histórico", "📊 Detetive"])
-
+aba_diario, aba_cadastros, aba_historico, aba_analise, aba_medico = st.tabs(["📝 Diário", "⚙️ Cadastros", "🗂️ Histórico", "📊 Detetive", "👩‍⚕️ Relatório Médico"])
 # ==============================================================================
 # ABA: DIÁRIO (Entrada de Dados)
 # ==============================================================================
@@ -579,3 +579,97 @@ with aba_analise:
                     st.dataframe(df_res[df_res['Impacto'] > 1.0].sort_values(by="Impacto", ascending=False).head(15), use_container_width=True)
             else:
                 st.info("Sem dados suficientes com esses filtros.")
+# ==============================================================================
+# NOVA ABA: RELATÓRIO MÉDICO
+# ==============================================================================
+with aba_medico:
+    st.header("👩‍⚕️ Relatório Médico: Histórico de Tratamentos")
+    st.info("Mostre esta tela para sua médica. Ela correlaciona o início de medicações com a resposta intestinal.")
+    
+    if df.empty:
+        st.warning("Sem dados suficientes.")
+    else:
+        # Filtros de Data para o Gráfico
+        min_date = df['DataHora'].min().date()
+        max_date = df['DataHora'].max().date()
+        
+        c_dates = st.columns(2)
+        with c_dates[0]: dt_ini = st.date_input("Início do Período", min_date)
+        with c_dates[1]: dt_fim = st.date_input("Fim do Período", max_date)
+        
+        # Filtra DF
+        mask = (df['DataHora'].dt.date >= dt_ini) & (df['DataHora'].dt.date <= dt_fim)
+        df_med = df.loc[mask].copy().sort_values('DataHora')
+        
+        # 1. GRÁFICO DE BRISTOL (Matplotlib para controle total)
+        if not df_med.empty:
+            df_plot = df_med[df_med['Escala de Bristol'] > 0] # Só dias com evacuação
+            
+            if not df_plot.empty:
+                fig, ax = plt.subplots(figsize=(10, 4))
+                
+                # Plota a linha
+                ax.plot(df_plot['DataHora'], df_plot['Escala de Bristol'], marker='o', linestyle='-', color='#333333', markersize=4)
+                
+                # Zonas Coloridas (Fundo)
+                # Vermelho (Constipação 1-2)
+                ax.axhspan(0.5, 2.5, color='#ffcccc', alpha=0.3)
+                # Verde (Normal 3-4)
+                ax.axhspan(2.5, 4.5, color='#ccffcc', alpha=0.3)
+                # Amarelo/Vermelho (Diarreia 5-7)
+                ax.axhspan(4.5, 7.5, color='#ffebcc', alpha=0.3)
+                
+                # Formatação
+                ax.set_yticks([1, 2, 3, 4, 5, 6, 7])
+                ax.set_ylabel("Escala de Bristol")
+                ax.grid(True, linestyle='--', alpha=0.5)
+                
+                # Formata datas no eixo X
+                ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+                plt.xticks(rotation=45)
+                
+                st.pyplot(fig)
+            else:
+                st.info("Nenhum registro de evacuação neste período.")
+        
+        st.divider()
+        
+        # 2. TABELA DE INÍCIO DE TRATAMENTOS
+        st.subheader("💊 Timeline de Medicações")
+        st.caption("Primeira vez que cada medicamento apareceu nos registros (dentro do período selecionado).")
+        
+        # Lógica para encontrar a primeira aparição
+        timeline = []
+        
+        # Pega todos os remédios únicos
+        todos_remedios = set()
+        for x in df_med['Remédios']:
+            if x:
+                itens = [i.strip() for i in x.split(',')]
+                todos_remedios.update(itens)
+        
+        # Para cada remédio, acha a data mínima
+        for remedio in todos_remedios:
+            if not remedio: continue
+            # Filtra linhas que contêm esse remédio
+            df_com_remedio = df_med[df_med['Remédios'].str.contains(re.escape(remedio), case=False, na=False)]
+            if not df_com_remedio.empty:
+                primeira_data = df_com_remedio['DataHora'].min()
+                timeline.append({'Data de Início': primeira_data, 'Medicamento': remedio})
+        
+        if timeline:
+            df_timeline = pd.DataFrame(timeline).sort_values('Data de Início')
+            # Formata a data para ficar bonita
+            df_timeline['Data de Início'] = df_timeline['Data de Início'].dt.strftime('%d/%m/%Y (%A)')
+            
+            st.dataframe(
+                df_timeline, 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "Medicamento": st.column_config.TextColumn("Medicamento", width="medium"),
+                    "Data de Início": st.column_config.TextColumn("Primeira Dose Registrada", width="medium")
+                }
+            )
+        else:
+            st.info("Nenhum medicamento registrado neste período.")
