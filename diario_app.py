@@ -189,7 +189,7 @@ def carregar_dados_nuvem():
             janela = df_cron[(df_cron['DataHora'] < dt_atual) & (df_cron['DataHora'] >= dt_inicio_janela)]
             
             # Se a janela não está vazia E não teve nenhuma crise nela -> É Porto Seguro
-            if not janela.empty and not janela[crise_mask].any().any():
+            if not janela.empty and not (janela['Escala de Bristol'] >= 5).any():
                 df_cron.loc[i, 'Porto_Seguro'] = True
         
         # Retorna o DF original (ordem decrescente) mas com a coluna calculada
